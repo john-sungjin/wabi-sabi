@@ -10,6 +10,7 @@ dependencies = [
     "ipykernel~=6.23.1",
     "mosaicml[wandb,tensorboard,nlp]~=0.14.1",
     "transformers<4.29, >=4.11",
+    "xformers~=0.0.20",
 ]
 readme = "README.md"
 requires-python = ">= 3.8"
@@ -22,9 +23,9 @@ build-backend = "hatchling.build"
 managed = true
 dev-dependencies = ["ruff~=0.0.270", "pyright~=1.1.311", "black~=23.3.0"]
 
-# [[tool.rye.sources]]
-# name="pytorch-index"
-# url = https://download.pytorch.org/whl/cu118
+[[tool.rye.sources]]
+name="pytorch-index"
+url = "https://download.pytorch.org/whl/cu118"
 
 [tool.hatch.metadata]
 allow-direct-references = true
