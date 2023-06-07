@@ -1,0 +1,30 @@
+[project]
+name = "wabi-sabi"
+version = "0.1.0"
+description = "Add a short description here"
+authors = [{ name = "John Sungjin Kim", email = "jsjkim00@gmail.com" }]
+dependencies = [
+    "torch~=2.0.1",
+    "datasets~=2.12.0",
+    "einops~=0.6.1",
+    "ipykernel~=6.23.1",
+    "mosaicml[wandb,tensorboard,nlp]~=0.14.1",
+    "transformers<4.29, >=4.11",
+]
+readme = "README.md"
+requires-python = ">= 3.8"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.rye]
+managed = true
+dev-dependencies = ["ruff~=0.0.270", "pyright~=1.1.311", "black~=23.3.0"]
+
+# [[tool.rye.sources]]
+# name="pytorch-index"
+# url = https://download.pytorch.org/whl/cu118
+
+[tool.hatch.metadata]
+allow-direct-references = true
