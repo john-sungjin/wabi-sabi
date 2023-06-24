@@ -11,6 +11,11 @@ dependencies = [
     "mosaicml[wandb,tensorboard,nlp]~=0.14.1",
     "transformers<4.29, >=4.11",
     "xformers~=0.0.20",
+    "torchinfo~=1.8.0",
+    "python_dotenv~=1.0.0",
+    "sentencepiece~=0.1.99",
+    "matplotlib~=3.7.1",
+    "psutil~=5.9.5",
 ]
 readme = "README.md"
 requires-python = ">= 3.8"
@@ -29,3 +34,25 @@ url = "https://download.pytorch.org/whl/cu118"
 
 [tool.hatch.metadata]
 allow-direct-references = true
+
+[tool.ruff]
+line-length = 120
+ignore = ["E501"]
+
+[tool.pyright]
+include = ["src"]
+typeCheckingMode = "strict"
+useLibraryCodeForTypes = true
+
+reportMissingTypeStubs = "warning"
+
+reportUnusedImport = "warning"
+reportUnusedVariable = "warning"
+
+reportPrivateImportUsage = "none"
+
+reportUnknownParameterType = "none"
+reportUnknownArgumentType = "none"
+reportUnknownLambdaType = "none"
+reportUnknownVariableType = "none"
+reportUnknownMemberType = "none"
