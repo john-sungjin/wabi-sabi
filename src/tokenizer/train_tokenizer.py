@@ -6,7 +6,6 @@ import psutil
 from composer.utils import reproducibility
 from datasets import load_dataset
 from dotenv import load_dotenv
-from numpy import add
 from tokenizers import (
     Tokenizer,
     decoders,
@@ -16,7 +15,7 @@ from tokenizers import (
     processors,
     trainers,
 )
-from transformers import AutoTokenizer, GPTNeoXTokenizerFast, LlamaTokenizerFast
+from transformers import PreTrainedTokenizerFast
 
 load_dotenv()
 
@@ -152,7 +151,7 @@ tokenizer.decoder = decoders.Sequence(
 trainer = trainers.BpeTrainer(
     vocab_size=8192,
     min_frequency=2,
-    special_tokens=[],
+    special_tokens=["<|endoftext|>"],
     # limit_alphabet=None,
     # initial_alphabet=None,
     show_progress=True,
@@ -163,8 +162,15 @@ start_time = time.time()
 tokenizer.train_from_iterator(
     iterator=batch_generator(dataset, 100), trainer=trainer, length=dataset.num_rows
 )
+
 end_time = time.time()
 print(f"Training took {end_time - start_time} seconds")
 
 print("Done training! Saving...")
 tokenizer.save("tokenizer.json")
+
+pretrained_tokenizer = PreTrainedTokenizerFast.from_pretrained("tokenizer.json")
+pretrained_tokenizer.pad_token = "<|endoftext|>"
+pretrained_tokenizer.pad_token_id = tokenizer.token_to_id("<|endoftext|>")
+
+pretrained_tokenizer.save_pretrained("tokenizer/")

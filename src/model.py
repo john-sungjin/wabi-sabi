@@ -1,8 +1,10 @@
 import math
+from typing import Any
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from einops import rearrange, repeat
 from transformers import PretrainedConfig, PreTrainedModel
 from xformers.components.feedforward import FusedMLP
 from xformers.triton import FusedLayerNorm
@@ -18,11 +20,11 @@ class WSConfig(PretrainedConfig):
 
     def __init__(
         self,
-        d_model: int = 64,
+        d_model: int = 24,
         n_heads: int = 2,
         n_layers: int = 2,
-        vocab_size: int = 50368,
-        **kwargs,  # for other HuggingFace params
+        vocab_size: int = 24,
+        **kwargs: Any,  # for other HuggingFace params
     ):
         super().__init__(**kwargs)
         self.d_model = d_model
@@ -33,7 +35,7 @@ class WSConfig(PretrainedConfig):
 
 
 class WSMultiQueryAttention(nn.Module):
-    def __init__(self, d_model: int, d_head: int):
+    def __init__(self, d_model: int, n_heads: int, d_head: int):
         super().__init__()
 
         # NOTE: this layer concatenates several tensors together
@@ -49,14 +51,53 @@ class WSMultiQueryAttention(nn.Module):
         self.concat_attention_to_residual = nn.Linear(d_model, d_model)
         self.concat_attention_to_residual._is_residual_projection = True
 
+        self.d_model = d_model
+        self.n_heads = n_heads
+        self.d_head = d_head
+
     def forward(self, x: torch.Tensor):
         qkv = self.residual_to_qkv(x)
         # split qkv into q, k, v
         q, k, v = torch.split(qkv, [self.d_model, self.d_head, self.d_head], dim=-1)
 
         # PyTorch's flash attention implementation
+        # the function expects q and k to have the same last dimension
+        # what we'll do is go from (batch_size, seq_len, d_model) to
+        # (batch_size, seq_len, n_heads, d_head) for q, k, and v
+        # q has values for all n_heads; since this is multiquery,
+        # k and v will have n_heads = 1, then get expanded to n_heads
+        # this is what mosaic does
+
+        q = rearrange(
+            q,
+            "batch seq_len (n_heads d_head) -> batch seq_len n_heads d_head",
+            n_heads=self.n_heads,
+            d_head=self.d_head,
+        )
+        # verified that this does the same as torch.expand; sets stride to 0
+        k = repeat(
+            k,
+            "batch seq_len (1 d_head) -> batch seq_len n_heads d_head",
+            n_heads=self.n_heads,
+            d_head=self.d_head,
+        )
+        v = repeat(
+            v,
+            "batch seq_len (1 d_head) -> batch seq_len n_heads d_head",
+            n_heads=self.n_heads,
+            d_head=self.d_head,
+        )
+
         concat_attention = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        # get back to (batch_size, seq_len, d_model)
+        concat_attention = rearrange(
+            concat_attention,
+            "batch seq_len n_heads d_head -> batch seq_len (n_heads d_head)",
+            n_heads=self.n_heads,
+            d_head=self.d_head,
+        )
         x = self.concat_attention_to_residual(concat_attention)
+
         return x
 
 
@@ -65,11 +106,12 @@ class WSBlock(nn.Module):
     def __init__(
         self,
         d_model: int,
+        n_heads: int,
         d_head: int,
     ):
         super().__init__()
         self.layer_norm_before_attention = FusedLayerNorm(d_model)
-        self.attention = WSMultiQueryAttention(d_model, d_head)
+        self.attention = WSMultiQueryAttention(d_model, n_heads, d_head)
         self.layer_norm_before_ffn = FusedLayerNorm(d_model)
 
         # this ratio is standard for transformers
@@ -112,6 +154,7 @@ class WSModel(PreTrainedModel):
             [
                 WSBlock(
                     d_model=config.d_model,
+                    n_heads=config.n_heads,
                     d_head=config.d_head,
                 )
                 for _ in range(config.n_layers)
@@ -171,7 +214,7 @@ class WSModel(PreTrainedModel):
         # num parameters, num flops, num bytes
 
     # TODO: kwargs are for other HuggingFace generate params. Implement if needed.
-    def forward(self, input_ids: torch.LongTensor, **kwargs):
+    def forward(self, input_ids: torch.LongTensor, **kwargs: Any):  # noqa: F821
         x = self.tokens_to_embeddings(input_ids)
 
         # MPT doesn't use embedding fraction
