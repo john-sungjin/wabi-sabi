@@ -1,11 +1,19 @@
 import math
-from typing import Any
+from typing import Any, Optional
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from composer.metrics.nlp import LanguageCrossEntropy
+from composer.models.huggingface import HuggingFaceModel
 from einops import rearrange, repeat
-from transformers import PretrainedConfig, PreTrainedModel
+from torchmetrics import Metric
+from transformers import (
+    DataCollatorForLanguageModeling,
+    PretrainedConfig,
+    PreTrainedModel,
+    PreTrainedTokenizerFast,
+)
 from transformers.modeling_outputs import CausalLMOutputWithPast
 from xformers.components.feedforward import FusedMLP
 from xformers.triton import FusedLayerNorm
@@ -21,10 +29,10 @@ class WSConfig(PretrainedConfig):
 
     def __init__(
         self,
-        d_model: int = 24,
-        n_heads: int = 2,
+        d_model: int = 64,
+        n_heads: int = 4,
         n_layers: int = 2,
-        vocab_size: int = 24,
+        vocab_size: int = 8192,
         **kwargs: Any,  # for other HuggingFace params
     ):
         super().__init__(**kwargs)
@@ -221,13 +229,19 @@ class WSModel(PreTrainedModel):
         self.apply(init_weights)
         self.apply(disable_bias)
 
-    # TODO: kwargs are for other HuggingFace generate params. Implement if needed.
-    def forward(self, input_ids: torch.LongTensor, **kwargs: Any):
+    def forward(
+        self,
+        input_ids: torch.LongTensor,
+        **kwargs: Any,
+    ):
         """
         Needs to return a CausalLMOutputWithPast. In the generation loop, we expect
         output to have attrs logits, decoder_attentions (if output_attentions),
         and hidden_states (if output_hidden_states).
         """
+        input_ids = input_ids.long()
+        print(input_ids.device)
+        print(input_ids.dtype)
         x = self.tokens_to_embeddings(input_ids)
 
         # MPT doesn't use embedding fraction
@@ -252,3 +266,81 @@ class WSModel(PreTrainedModel):
         """
 
         return {"input_ids": input_ids}
+
+
+class ComposerWSModel(HuggingFaceModel):
+    def __init__(
+        self,
+        config: WSConfig,
+        tokenizer: PreTrainedTokenizerFast,
+    ):
+        model = WSModel(config)
+
+        # this takes in pred and target logits
+        # should be batch_size x seq_len x vocab_size? probably
+        train_metrics: list[Metric] = [LanguageCrossEntropy()]
+
+        super().__init__(
+            model=model,
+            tokenizer=tokenizer,
+            use_logits=True,
+            shift_labels=True,  # labels come in unshifted, this shifts before metrics
+            metrics=train_metrics,
+        )
+
+        # Note: wanted to use flash-attn for fused CE, but there's an install error with rye
+        # Honestly should be pretty small relative to other things, not going to worry about it for now
+        self.loss_fn = torch.nn.CrossEntropyLoss()
+
+        # Used to compute flops
+        self.n_active_params = sum(p.numel() for p in self.parameters())
+
+    def forward(self, batch: dict[str, Any]):
+        """
+        Mosaic's forward pass. Batch is a Mapping with keys possibly reflecting HuggingFace's forward function inputs.
+        Check GPT2 implementation for args; there isn't really a standard set.
+
+        Output needs to be an output dataclass from huggingface.
+        """
+        return self.model(batch["input_ids"])
+
+    def loss(self, outputs: CausalLMOutputWithPast, batch: dict[str, Any]):
+        """
+        Mosaic's loss function. Outputs is the output of the forward pass.
+        """
+        # outputs is batch x seq_len x vocab_size
+        # labels is batch x seq_len
+        # need to reduce to (batch * seq_len) x vocab_size and (batch * seq_len)
+        output_logits = rearrange(
+            outputs.logits,
+            "batch seq_len vocab_size -> (batch seq_len) vocab_size",
+            vocab_size=self.config.vocab_size,
+        )
+        labels = batch["labels"]
+        # shift labels left
+        labels = torch.roll(labels, -1, dims=1)
+        labels[:, -1] = -100  # don't predict the last token
+        # flatten
+        labels = rearrange(labels, "batch seq_len -> (batch seq_len)")
+
+        return self.loss_fn(output_logits, labels)
+
+    def flops_per_batch(self, batch: dict[str, Any]):
+        """
+        Taken from MPT. MSL is max sequence length.
+        """
+        # Note: this computation does not take into account padding, and assumes
+        # that the dataset has been constructed without padding. Additionally, we
+        # assume the backward pass is approximately 2x the forward pass
+
+        bs, msl = batch["input_ids"].shape[0:2]
+        params_flops_per_token = 2 * self.n_active_params
+        params_flops_per_seq = params_flops_per_token * msl
+        attn_flops_per_seq = (
+            self.model.config.n_layers
+            * 2
+            * 2
+            * (self.model.config.d_model * (msl**2))
+        )
+
+        return (params_flops_per_seq + attn_flops_per_seq) * 3 * bs
