@@ -3,7 +3,8 @@ from typing import Any
 
 import datasets
 import torch.utils.data
-from composer import Trainer
+import wandb
+from composer import Callback, Logger, State, Time, Trainer
 from composer.callbacks import SpeedMonitor
 from composer.loggers import WandBLogger
 from composer.optim import DecoupledAdamW, LinearWithWarmupScheduler
@@ -100,13 +101,37 @@ train_dataloader = torch.utils.data.DataLoader(
 composer_model = ComposerWSModel(config=config, tokenizer=tokenizer)
 optimizer = DecoupledAdamW(
     composer_model.model.parameters(),
-    # lr=1.0e-4,
-    # betas=(0.9, 0.98),
-    # eps=1.0e-06,
-    # weight_decay=1.0e-5,
     **optim,
 )
 lr_scheduler = LinearWithWarmupScheduler(**learning_rate)
+
+
+class SampleCallback(Callback):
+    def __init__(
+        self, sample_prompt: str, tokenizer: PreTrainedTokenizerFast, interval: str
+    ):
+        self.sample_prompt_ids = tokenizer.encode(sample_prompt, return_tensors="pt")
+        self.interval = Time.from_timestring(interval)
+        self.last_sample = Time(0, "ba")
+        self.tokenizer = tokenizer
+
+        # create table for samples
+        self.table = wandb.Table(columns=["sample"])
+        super().__init__()
+
+    def batch_end(self, state: State, logger: Logger):
+        if (state.timestamp.batch - self.last_sample) < self.interval:
+            return
+        output_ids = state.model.generate(
+            state.device.tensor_to_device(self.sample_prompt_ids),
+            max_new_tokens=30,
+        )
+        output_text = self.tokenizer.decode(output_ids[0])
+        self.table.add_data(output_text)
+        logger.log_metrics({"samples": self.table})
+
+        self.last_sample = state.timestamp.batch
+
 
 wandb_logger = WandBLogger(project="wabisabi")
 
@@ -121,6 +146,11 @@ trainer = Trainer(
     device="gpu" if torch.cuda.is_available() else "cpu",
     precision="fp32",
     progress_bar=True,
+    loggers=[wandb_logger],
+    callbacks=[
+        SpeedMonitor(),
+        SampleCallback("Hi, my name is", tokenizer, save_interval),
+    ],
     # checkpointing
     save_folder=save_folder,
     save_filename="ep{epoch}-ba{batch}-rank{rank}.pt",

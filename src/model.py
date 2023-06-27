@@ -239,9 +239,7 @@ class WSModel(PreTrainedModel):
         output to have attrs logits, decoder_attentions (if output_attentions),
         and hidden_states (if output_hidden_states).
         """
-        input_ids = input_ids.long()
-        print(input_ids.device)
-        print(input_ids.dtype)
+        # input_ids = input_ids.long() # have this for deepspeed profiling
         x = self.tokens_to_embeddings(input_ids)
 
         # MPT doesn't use embedding fraction
