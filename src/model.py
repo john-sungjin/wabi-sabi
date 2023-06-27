@@ -6,6 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, repeat
 from transformers import PretrainedConfig, PreTrainedModel
+from transformers.modeling_outputs import CausalLMOutputWithPast
 from xformers.components.feedforward import FusedMLP
 from xformers.triton import FusedLayerNorm
 
@@ -140,6 +141,16 @@ class WSBlock(nn.Module):
 
 
 class WSModel(PreTrainedModel):
+    """
+    Generally, Hugging Face LLMs have a base model that outputs hidden states,
+    then a head that outputs the task-specific outputs. I'm only implementing
+    autoregressive language modeling, so I'll just have it all here for simplicity.
+    """
+
+    # Need to define this for Hugging Face
+    # "The line that sets the config_class is not mandatory, unless you want to register your model with the auto classes (see last section)."
+    # config_class = WSConfig
+
     def __init__(self, config: WSConfig):
         super().__init__(config)
         self.config = config
@@ -210,11 +221,13 @@ class WSModel(PreTrainedModel):
         self.apply(init_weights)
         self.apply(disable_bias)
 
-        # print model stats
-        # num parameters, num flops, num bytes
-
     # TODO: kwargs are for other HuggingFace generate params. Implement if needed.
-    def forward(self, input_ids: torch.LongTensor, **kwargs: Any):  # noqa: F821
+    def forward(self, input_ids: torch.LongTensor, **kwargs: Any):
+        """
+        Needs to return a CausalLMOutputWithPast. In the generation loop, we expect
+        output to have attrs logits, decoder_attentions (if output_attentions),
+        and hidden_states (if output_hidden_states).
+        """
         x = self.tokens_to_embeddings(input_ids)
 
         # MPT doesn't use embedding fraction
@@ -225,4 +238,17 @@ class WSModel(PreTrainedModel):
 
         x = self.layer_norm_final(x)
         x = self.embeddings_to_logits(x)
-        return x
+        return CausalLMOutputWithPast(logits=x)
+
+    def prepare_inputs_for_generation(self, input_ids: torch.LongTensor, **kwargs: Any):
+        """
+        Must be implemented to use generate() method. Checked by can_generate().
+
+        Not sure what the other kwargs are for, but you can see what the function expects
+        in GenerationMixin.
+
+        Expects a dictionary model_inputs. This is destructured and given to the
+        forward() method.
+        """
+
+        return {"input_ids": input_ids}
