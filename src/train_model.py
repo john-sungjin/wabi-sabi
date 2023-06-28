@@ -3,6 +3,7 @@ from typing import Any
 
 import datasets
 import torch.utils.data
+import torchinfo
 import wandb
 from composer import Callback, Logger, State, Time, Trainer
 from composer.callbacks import SpeedMonitor
@@ -17,22 +18,22 @@ CACHE_DIR = "/datadrive/hf_cache"
 
 ###### CONFIG ######
 model_params = {
-    "d_model": 64,
+    "d_model": 256,
     "n_heads": 4,
-    "n_layers": 2,
+    "n_layers": 12,
     "vocab_size": 8192,
 }
 
 seed = 42
 optim = {
-    "lr": 1e-4,
-    "betas": (0.9, 0.98),
-    "eps": 1.0e-06,
-    "weight_decay": 1.0e-5,
+    "lr": 6.0e-4,
+    "betas": (0.9, 0.95),
+    "eps": 1.0e-08,
+    "weight_decay": 0.0,
 }
-learning_rate = {"t_warmup": "250ba", "alpha_f": 0.02}
+learning_rate = {"t_warmup": "100ba", "alpha_f": 0.1}
 precision = "fp32"
-batch_size = 64
+batch_size = 128
 context_length = 256
 
 save_folder = "checkpoints/pretraining/"
@@ -82,11 +83,22 @@ wikihow_data: datasets.Dataset = datasets.load_dataset(
     seed=seed
 )  # type: ignore
 
+# wikipedia_dataset: datasets.Dataset = datasets.load_dataset(
+#     "wikipedia",
+#     name="20220301.en",
+#     cache_dir=CACHE_DIR,
+#     use_auth_token=HF_TOKEN,
+#     split="train",
+#     # streaming=True,
+# ).shuffle(
+#     seed=seed
+# )  # type: ignore
+
 tokenized_train = wikihow_data.map(
     tokenize_function,
     batched=True,
     remove_columns=wikihow_data.column_names,  # collate_fn doesn't like other columns
-    load_from_cache_file=False,
+    # load_from_cache_file=False,
 )
 
 collate_fn = DataCollatorForLanguageModeling(
@@ -99,6 +111,10 @@ train_dataloader = torch.utils.data.DataLoader(
 )
 
 composer_model = ComposerWSModel(config=config, tokenizer=tokenizer)
+torchinfo.summary(
+    composer_model.model, input_size=(batch_size, context_length), dtypes=[torch.long]
+)
+
 optimizer = DecoupledAdamW(
     composer_model.model.parameters(),
     **optim,
@@ -149,7 +165,7 @@ trainer = Trainer(
     loggers=[wandb_logger],
     callbacks=[
         SpeedMonitor(),
-        SampleCallback("Hi, my name is", tokenizer, save_interval),
+        SampleCallback("To cook pasta, the first step is to", tokenizer, save_interval),
     ],
     # checkpointing
     save_folder=save_folder,
@@ -158,10 +174,15 @@ trainer = Trainer(
     save_overwrite=True,
 )
 
-# Start training
-trainer.fit()
+try:
+    # Start training
+    trainer.fit()
+finally:
+    trainer.close()
 
+print("Saving model...")
 # Save Hugging Face model
 config.save_pretrained(hf_save_folder)
 tokenizer.save_pretrained(hf_save_folder)
 composer_model.model.save_pretrained(hf_save_folder)
+print("Done!")
