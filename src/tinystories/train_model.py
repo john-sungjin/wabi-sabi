@@ -1,4 +1,6 @@
+# In[ ]:
 import os
+import sys
 from typing import Any
 
 import datasets
@@ -10,13 +12,23 @@ from composer.callbacks import SpeedMonitor
 from composer.loggers import WandBLogger
 from composer.optim import DecoupledAdamW, LinearWithWarmupScheduler
 from composer.utils import reproducibility
-from model import ComposerWSModel, WSConfig
 from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizerFast
+
+# to allow model import
+sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+from model import ComposerWSModel, WSConfig
 
 HF_TOKEN = os.getenv("HF_TOKEN")
 CACHE_DIR = "/datadrive/hf_cache"
+script_dir = os.path.dirname(os.path.abspath(__file__))
+data_dir = os.path.join(script_dir, "data")
 
+# In[ ]:
 ###### CONFIG ######
+run_name = "ts-1"  # change if you want to not autoresume
+
+run_dir = os.path.join(script_dir, "runs", run_name)
+
 model_params = {
     "d_model": 256,
     "n_heads": 4,
@@ -34,19 +46,20 @@ optim = {
 learning_rate = {"t_warmup": "100ba", "alpha_f": 0.1}
 precision = "fp32"
 batch_size = 128
-context_length = 256
+context_length = 256  # removing this because we want to train on full stories
 
-save_folder = "checkpoints/pretraining/"
+save_folder = os.path.join(run_dir, "checkpoints")
 save_interval = "500ba"
-hf_save_folder = "huggingface_model/"
+hf_save_folder = os.path.join(run_dir, "hfmodel")
 
-tokenizer_dir = "tokenizer/"
+tokenizer_dir = os.path.join(script_dir, "tokenizer")
 ###### END CONFIG ######
-
-
 reproducibility.seed_all(seed)
 
-tokenizer = PreTrainedTokenizerFast.from_pretrained(tokenizer_dir)
+# In[ ]:
+tokenizer: PreTrainedTokenizerFast = PreTrainedTokenizerFast.from_pretrained(
+    tokenizer_dir
+)
 config = WSConfig(**model_params)
 
 text_column_name = "text"
@@ -55,64 +68,71 @@ text_column_name = "text"
 def tokenize_function(examples: dict[str, Any]):
     """
     Tokenize dataset examples.
+    We don't truncate anything for Tiny Stories;
+    we'll do max length padding in the collate function.
     """
     examples[text_column_name] = [
         line
         for line in examples[text_column_name]
         if len(line) > 0 and not line.isspace()
     ]
-    return tokenizer(
+
+    tokenized = tokenizer(
         examples[text_column_name],
-        padding="max_length",
-        truncation=True,
-        max_length=context_length,
         return_special_tokens_mask=True,
+        padding="max_length",
+        max_length=context_length,
+        truncation=True,
+        return_tensors="pt",
     )
+
+    return tokenized
 
 
 print("Loading datasets...")
-wikihow_data: datasets.Dataset = datasets.load_dataset(
-    "wikihow",
-    name="all",
-    data_dir=CACHE_DIR,
-    cache_dir=CACHE_DIR,
-    use_auth_token=HF_TOKEN,
-    split="train",
-    # streaming=True,
-).shuffle(
-    seed=seed
-)  # type: ignore
+tinystories_data: datasets.Dataset = datasets.load_from_disk(data_dir).with_format("torch")  # type: ignore
 
-# wikipedia_dataset: datasets.Dataset = datasets.load_dataset(
-#     "wikipedia",
-#     name="20220301.en",
-#     cache_dir=CACHE_DIR,
-#     use_auth_token=HF_TOKEN,
-#     split="train",
-#     # streaming=True,
-# ).shuffle(
-#     seed=seed
-# )  # type: ignore
+# tinystories_data = tinystories_data.select(range(100))
 
-tokenized_train = wikihow_data.map(
+tokenized_train = tinystories_data.map(
     tokenize_function,
     batched=True,
-    remove_columns=wikihow_data.column_names,  # collate_fn doesn't like other columns
-    # load_from_cache_file=False,
+    remove_columns=tinystories_data.column_names,  # collate_fn doesn't like other columns
+    num_proc=8,
 )
 
+print("Length of dataset before filtering:", tokenized_train.num_rows)
+# tokenized_train = tokenized_train.filter(
+#     lambda x: len(x["input_ids"]) <= context_length, num_proc=8
+# )
+# print("Length of dataset after filtering:", tokenized_train.num_rows)
+
+# In[ ]:
+# this collator sets padding tokens to -100
+# before, we had set padding tokens = endoftext, so model wasn't learning
+# to predict the end of the story
 collate_fn = DataCollatorForLanguageModeling(
     tokenizer=tokenizer,
     mlm=False,
 )
 
 train_dataloader = torch.utils.data.DataLoader(
-    tokenized_train, batch_size=batch_size, collate_fn=collate_fn
+    tokenized_train,
+    batch_size=batch_size,
+    collate_fn=collate_fn,
+    pin_memory=True,
+    num_workers=8,
+    persistent_workers=True,
 )
 
+# In[ ]:
 composer_model = ComposerWSModel(config=config, tokenizer=tokenizer)
-torchinfo.summary(
-    composer_model.model, input_size=(batch_size, context_length), dtypes=[torch.long]
+print(
+    torchinfo.summary(
+        composer_model.model,
+        input_size=(batch_size, context_length),
+        dtypes=[torch.long],
+    )
 )
 
 optimizer = DecoupledAdamW(
@@ -140,7 +160,7 @@ class SampleCallback(Callback):
             return
         output_ids = state.model.generate(
             state.device.tensor_to_device(self.sample_prompt_ids),
-            max_new_tokens=30,
+            max_new_tokens=100,
         )
         output_text = self.tokenizer.decode(output_ids[0])
         self.table.add_data(output_text)
@@ -149,9 +169,9 @@ class SampleCallback(Callback):
         self.last_sample = state.timestamp.batch
 
 
-wandb_logger = WandBLogger(project="wabisabi")
-
+# In[ ]:
 # Create Trainer Object
+wandb_logger = WandBLogger(project="wabisabi")
 trainer = Trainer(
     model=composer_model,  # This is the model from the HuggingFaceModel wrapper class.
     train_dataloader=train_dataloader,
@@ -159,24 +179,28 @@ trainer = Trainer(
     max_duration="1ep",  # train for more epochs to get better performance
     optimizers=optimizer,
     schedulers=[lr_scheduler],
-    device="gpu" if torch.cuda.is_available() else "cpu",
-    precision="fp32",
+    device="gpu",
+    precision="amp_fp16",  # mixed precision training
     progress_bar=True,
     loggers=[wandb_logger],
     callbacks=[
         SpeedMonitor(),
-        # SampleCallback("To cook pasta, the first step is to", tokenizer, save_interval),
+        SampleCallback("Once upon a time,", tokenizer, save_interval),
     ],
     # checkpointing
     save_folder=save_folder,
     save_filename="ep{epoch}-ba{batch}-rank{rank}.pt",
     save_interval=save_interval,
-    save_overwrite=True,
+    # save_overwrite=True,
+    # autoresume
+    run_name=run_name,
+    autoresume=True,
 )
 
 # Start training
 trainer.fit()
 
+# In[ ]:
 print("Saving model...")
 # Save Hugging Face model
 config.save_pretrained(hf_save_folder)

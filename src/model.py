@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from composer.metrics.nlp import LanguageCrossEntropy
 from composer.models.huggingface import HuggingFaceModel
 from einops import rearrange, repeat
+from rotary_embedding import RotaryEmbedding
 from torchmetrics import Metric
 from transformers import (
     DataCollatorForLanguageModeling,
@@ -79,20 +80,20 @@ class WSMultiQueryAttention(nn.Module):
 
         q = rearrange(
             q,
-            "batch seq_len (n_heads d_head) -> batch seq_len n_heads d_head",
+            "batch seq_len (n_heads d_head) -> batch n_heads seq_len d_head",
             n_heads=self.n_heads,
             d_head=self.d_head,
         )
         # verified that this does the same as torch.expand; sets stride to 0
         k = repeat(
             k,
-            "batch seq_len (1 d_head) -> batch seq_len n_heads d_head",
+            "batch seq_len (1 d_head) -> batch n_heads seq_len d_head",
             n_heads=self.n_heads,
             d_head=self.d_head,
         )
         v = repeat(
             v,
-            "batch seq_len (1 d_head) -> batch seq_len n_heads d_head",
+            "batch seq_len (1 d_head) -> batch n_heads seq_len d_head",
             n_heads=self.n_heads,
             d_head=self.d_head,
         )
@@ -101,7 +102,83 @@ class WSMultiQueryAttention(nn.Module):
         # get back to (batch_size, seq_len, d_model)
         concat_attention = rearrange(
             concat_attention,
-            "batch seq_len n_heads d_head -> batch seq_len (n_heads d_head)",
+            "batch n_heads seq_len d_head -> batch seq_len (n_heads d_head)",
+            n_heads=self.n_heads,
+            d_head=self.d_head,
+        )
+        x = self.concat_attention_to_residual(concat_attention)
+
+        return x
+
+
+class WSAttention(nn.Module):
+    def __init__(self, d_model: int, n_heads: int, d_head: int):
+        super().__init__()
+
+        # NOTE: this layer concatenates several tensors together
+        # When initializing params, we should instantiate these separately.
+        # output size: q, k, and v are all -> d_model
+        self.residual_to_qkv = nn.Linear(d_model, d_model * 3)
+        # _splits[0]: the dimension by which the tensor is split
+        # Note that, for nn.Linear(dim_a, dim_b), the weights are of shape (dim_b, dim_a)
+        # So, the split dimension here is 0
+        # _splits[1]: the split sizes
+        self.residual_to_qkv._splits = (0, (d_model, d_model, d_model))
+
+        self.concat_attention_to_residual = nn.Linear(d_model, d_model)
+        self.concat_attention_to_residual._is_residual_projection = True
+
+        self.d_model = d_model
+        self.n_heads = n_heads
+        self.d_head = d_head
+
+        # no learned parameters, so technically can be instantiated once
+        # clean up later
+        # self.rotary_embedding = RotaryEmbedding(d_head)
+
+    def forward(self, x: torch.Tensor):
+        qkv = self.residual_to_qkv(x)
+        # split qkv into q, k, v
+        q, k, v = torch.split(qkv, [self.d_model, self.d_model, self.d_model], dim=-1)
+
+        # PyTorch's flash attention implementation
+        # the function expects q and k to have the same last dimension
+        # what we'll do is go from (batch_size, seq_len, d_model) to
+        # (batch_size, seq_len, n_heads, d_head) for q, k, and v
+        # q has values for all n_heads; since this is multiquery,
+        # k and v will have n_heads = 1, then get expanded to n_heads
+        # this is what mosaic does
+
+        q = rearrange(
+            q,
+            "batch seq_len (n_heads d_head) -> batch n_heads seq_len d_head",
+            n_heads=self.n_heads,
+            d_head=self.d_head,
+        )
+        # verified that this does the same as torch.expand; sets stride to 0
+        k = rearrange(
+            k,
+            "batch seq_len (n_heads d_head) -> batch n_heads seq_len d_head",
+            n_heads=self.n_heads,
+            d_head=self.d_head,
+        )
+
+        # apply rotary embedding to q and k
+        # q = self.rotary_embedding.rotate_queries_or_keys(q)
+        # k = self.rotary_embedding.rotate_queries_or_keys(k)
+
+        v = rearrange(
+            v,
+            "batch seq_len (n_heads d_head) -> batch n_heads seq_len d_head",
+            n_heads=self.n_heads,
+            d_head=self.d_head,
+        )
+
+        concat_attention = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        # get back to (batch_size, seq_len, d_model)
+        concat_attention = rearrange(
+            concat_attention,
+            "batch n_heads seq_len d_head -> batch seq_len (n_heads d_head)",
             n_heads=self.n_heads,
             d_head=self.d_head,
         )
@@ -120,7 +197,8 @@ class WSBlock(nn.Module):
     ):
         super().__init__()
         self.layer_norm_before_attention = FusedLayerNorm(d_model)
-        self.attention = WSMultiQueryAttention(d_model, n_heads, d_head)
+        # self.attention = WSMultiQueryAttention(d_model, n_heads, d_head)
+        self.attention = WSAttention(d_model, n_heads, d_head)
         self.layer_norm_before_ffn = FusedLayerNorm(d_model)
 
         # this ratio is standard for transformers
