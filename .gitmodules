@@ -1,0 +1,3 @@
+[submodule "cpp/ggml"]
+	path = cpp/ggml
+	url = git@github.com:ggerganov/ggml.git
