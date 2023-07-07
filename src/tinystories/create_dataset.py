@@ -43,3 +43,9 @@ tinystories_data = datasets.load_from_disk(data_dir)
 
 # In[ ]:
 print(tinystories_data[1])
+
+
+# In[ ]:
+tinystories_instruct_data = datasets.load_dataset(
+    "roneneldan/TinyStoriesInstruct", cache_dir=CACHE_DIR
+)

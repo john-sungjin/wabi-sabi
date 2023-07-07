@@ -11,6 +11,8 @@ from composer import Callback, Logger, State, Time, Trainer
 from composer.callbacks import SpeedMonitor
 from composer.loggers import WandBLogger
 from composer.optim import DecoupledAdamW, LinearWithWarmupScheduler
+from composer.profiler import JSONTraceHandler, cyclic_schedule
+from composer.profiler.profiler import Profiler
 from composer.utils import reproducibility
 from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizerFast
 
@@ -21,11 +23,11 @@ from model import ComposerWSModel, WSConfig
 HF_TOKEN = os.getenv("HF_TOKEN")
 CACHE_DIR = "/datadrive/hf_cache"
 script_dir = os.path.dirname(os.path.abspath(__file__))
-data_dir = os.path.join(script_dir, "data")
+data_dir = os.path.join(script_dir, "data/TinyStories")
 
 # In[ ]:
 ###### CONFIG ######
-run_name = "ts-1"  # change if you want to not autoresume
+run_name = "ts-1-512seqlen"  # change if you want to not autoresume
 
 run_dir = os.path.join(script_dir, "runs", run_name)
 
@@ -46,7 +48,7 @@ optim = {
 learning_rate = {"t_warmup": "100ba", "alpha_f": 0.1}
 precision = "fp32"
 batch_size = 128
-context_length = 256  # removing this because we want to train on full stories
+context_length = 512  # removing this because we want to train on full stories
 
 save_folder = os.path.join(run_dir, "checkpoints")
 save_interval = "500ba"
@@ -195,10 +197,31 @@ trainer = Trainer(
     # autoresume
     run_name=run_name,
     autoresume=True,
+    # profiling
+    profiler=Profiler(
+        trace_handlers=[
+            JSONTraceHandler(
+                folder=os.path.join(run_dir, "composer_traces"), overwrite=True
+            )
+        ],
+        schedule=cyclic_schedule(
+            skip_first=1200,
+            wait=0,
+            warmup=1,
+            active=4,
+            repeat=1,
+        ),
+        torch_prof_folder=os.path.join(run_dir, "torch_traces"),
+        torch_prof_overwrite=True,
+    ),
 )
 
 # Start training
 trainer.fit()
+
+# In[ ]:
+# state_dict = torch.load("runs/ts-1-512seqlen/checkpoints/latest-rank0.pt")
+# composer_model.load_state_dict(state_dict["state"]["model"])
 
 # In[ ]:
 print("Saving model...")

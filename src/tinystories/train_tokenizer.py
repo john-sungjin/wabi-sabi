@@ -129,6 +129,8 @@ tokenizer.save(os.path.join(tokenizer_save_dir, "tokenizer.json"))
 pretrained_tokenizer = PreTrainedTokenizerFast.from_pretrained(
     os.path.join(tokenizer_save_dir, "tokenizer.json")
 )
+pretrained_tokenizer.eos_token = "<|endoftext|>"
+pretrained_tokenizer.eos_token_id = tokenizer.token_to_id("<|endoftext|>")
 pretrained_tokenizer.pad_token = "<|pad|>"
 pretrained_tokenizer.pad_token_id = tokenizer.token_to_id("<|pad|>")
 
