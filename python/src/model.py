@@ -1,5 +1,5 @@
 import math
-from typing import Any, Optional
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -10,14 +10,14 @@ from einops import rearrange, repeat
 from rotary_embedding import RotaryEmbedding
 from torchmetrics import Metric
 from transformers import (
-    DataCollatorForLanguageModeling,
     PretrainedConfig,
     PreTrainedModel,
     PreTrainedTokenizerFast,
 )
 from transformers.modeling_outputs import CausalLMOutputWithPast
-from xformers.components.feedforward import FusedMLP
-from xformers.triton import FusedLayerNorm
+
+# from xformers.components.feedforward import FusedMLP
+# from xformers.triton import FusedLayerNorm
 
 
 # need to fix this config
