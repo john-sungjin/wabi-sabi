@@ -4,3 +4,6 @@
 [submodule "inference/llm-foundry"]
 	path = inference/llm-foundry
 	url = git@github.com:mosaicml/llm-foundry.git
+[submodule "inference/FasterTransformer"]
+	path = inference/FasterTransformer
+	url = git@github.com:NVIDIA/FasterTransformer.git

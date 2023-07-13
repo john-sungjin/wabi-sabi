@@ -11,3 +11,6 @@ TODO:
 - Fine-Tuning (LORA, SFT)
 - Quantization
 - Large models: how to train/deploy on multiple GPUs, getting more intuition here
+
+To run docker container for inference:
+docker run -it --gpus all -v /datadrive:/datadrive --name main mosaicml/llm-foundry:2.0.1_cu118-latest /bin/bash
