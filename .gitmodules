@@ -1,3 +1,6 @@
 [submodule "cpp/ggml"]
 	path = cpp/ggml
 	url = git@github.com:john-sungjin/ggml.git
+[submodule "inference/llm-foundry"]
+	path = inference/llm-foundry
+	url = git@github.com:mosaicml/llm-foundry.git
