@@ -1,0 +1,56 @@
+[tool.poetry]
+name = "distillation"
+version = "0.1.0"
+description = ""
+authors = ["John Sungjin Kim <jsjkim00@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+torch = {version = "^2.0.1+cu118", source = "pytorch"}
+transformers = "^4.30.2"
+datasets = "^2.13.1"
+ipykernel = "^6.24.0"
+ipywidgets = "^8.0.7"
+einops = "^0.6.1"
+triton-pre-mlir = { git = "https://github.com/vchiley/triton.git", branch="triton_pre_mlir", subdirectory="python" }
+flash-attn = "1.0.8"
+xentropy-cuda-lib = { git = "https://github.com/HazyResearch/flash-attention.git", subdirectory= "csrc/xentropy"}
+
+
+[[tool.poetry.source]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cu118"
+priority = "explicit"
+
+
+[tool.poetry.group.dev.dependencies]
+ruff = "^0.0.278"
+pyright = "^1.1.317"
+black = "^23.7.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+line-length = 120
+ignore = ["E501"]
+
+[tool.pyright]
+include = ["src"]
+typeCheckingMode = "strict"
+useLibraryCodeForTypes = true
+
+reportMissingTypeStubs = "warning"
+
+reportUnusedImport = "warning"
+reportUnusedVariable = "warning"
+
+reportPrivateImportUsage = "none"
+
+reportUnknownParameterType = "none"
+reportUnknownArgumentType = "none"
+reportUnknownLambdaType = "none"
+reportUnknownVariableType = "none"
+reportUnknownMemberType = "none"
