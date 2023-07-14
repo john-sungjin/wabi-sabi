@@ -1,0 +1,1 @@
+\n1) You can get better results than training a general purpose dataset, because the data is more relevant to your problem and therefore has higher quality labels (e..g., if I'm trying out facial recognition algorithms for detecting emotions in faces). 2.) It's easier/faster: it takes less time & effort collecting
