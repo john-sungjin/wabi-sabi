@@ -1,6 +1,9 @@
 {
   "cmake.sourceDirectory": "${workspaceFolder}/cpp/ggml",
   "cmake.buildDirectory": "${workspaceFolder}/cpp/ggml/build",
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}/inference/llm-foundry"
+  ],
   "files.associations": {
     "*.njk": "jinja-html",
     "ggml.h": "c",

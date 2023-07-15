@@ -1,0 +1,30 @@
+model:
+  name: mpt_causal_lm
+  init_device: cuda:0
+  d_model: 1024
+  n_heads: 16
+  n_layers: 24
+  expansion_ratio: 4
+  max_seq_len: 512
+  vocab_size: 50432
+  learned_pos_emb: false
+  attn_config:
+    alibi: true
+    alibi_bias_max: 8
+    attn_impl: triton
+  torch_dtype: bfloat16
+
+# Optimization
+scheduler:
+  name: cosine_with_warmup
+  t_warmup: 100ba
+  alpha_f: 0.1
+
+optimizer:
+  name: decoupled_adamw
+  lr: 3.0e-4
+  betas:
+  - 0.9
+  - 0.95
+  eps: 1.0e-08
+  weight_decay: 0.0
