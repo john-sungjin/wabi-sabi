@@ -7,7 +7,6 @@ model:
   expansion_ratio: 4
   max_seq_len: 512
   vocab_size: 50432
-  learned_pos_emb: false
   attn_config:
     alibi: true
     alibi_bias_max: 8
@@ -22,7 +21,7 @@ scheduler:
 
 optimizer:
   name: decoupled_adamw
-  lr: 3.0e-4
+  lr: 1.0e-4
   betas:
   - 0.9
   - 0.95
